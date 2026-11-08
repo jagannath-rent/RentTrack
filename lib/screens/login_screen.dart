@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:tenant_owner_app/services/auth_service.dart';
 import 'tenant/tenant_home.dart';
 import 'tenant/tenant_signup_page.dart';
 import 'owner/owner_home.dart';
@@ -8,14 +10,14 @@ import 'package:tenant_owner_app/screens/owner/owner_signup_page.dart';
 import 'package:tenant_owner_app/theme/rentflow_colors.dart';
 
 // ── RentFlow "certificate" palette (sourced from theme/rentflow_colors.dart) ──
-const _ink        = kRfInk;
-const _ivory      = kRfIvory;
-const _gold       = kRfGold;
-const _goldDark   = kRfGoldDark;
-const _sapphire   = kRfSapphire;
+const _ink = kRfInk;
+const _ivory = kRfIvory;
+const _gold = kRfGold;
+const _goldDark = kRfGoldDark;
+const _sapphire = kRfSapphire;
 const _sapphireDk = kRfSapphireDk;
-const _inkFaint   = kRfInkFaint;
-const _inkSoft    = kRfInkSoft;
+const _inkFaint = kRfInkFaint;
+const _inkSoft = kRfInkSoft;
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -25,34 +27,87 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final _idController       = TextEditingController();
+  final _idController = TextEditingController();
   final _passwordController = TextEditingController();
-  String _selectedRole      = 'Tenant';
-  bool _isLoading           = false;
-  bool _obscurePassword     = true;
+  final _auth = AuthService();
+  String _selectedRole = 'Tenant';
+  bool _isLoading = false;
+  bool _obscurePassword = true;
 
-  Color get _accent     => _selectedRole == 'Owner' ? _gold : _sapphire;
+  Color get _accent => _selectedRole == 'Owner' ? _gold : _sapphire;
   Color get _accentDark => _selectedRole == 'Owner' ? _goldDark : _sapphireDk;
 
-  void _login() async {
-    if (_idController.text.isEmpty || _passwordController.text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please fill in all fields')),
+  @override
+  void dispose() {
+    _idController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _login() async {
+    final id = _idController.text.trim();
+    final password = _passwordController.text;
+
+    if (id.isEmpty || password.isEmpty) {
+      _showMessage('Please fill in all fields');
+      return;
+    }
+
+    // ── Tenant: unchanged for now (will be made real later) ──
+    if (_selectedRole == 'Tenant') {
+      setState(() => _isLoading = true);
+      await Future.delayed(const Duration(seconds: 1));
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const TenantHome()),
       );
       return;
     }
 
+    // ── Owner: real login (email OR mobile number) ──
     setState(() => _isLoading = true);
-    await Future.delayed(const Duration(seconds: 1));
-    if (!mounted) return;
-    setState(() => _isLoading = false);
+    try {
+      await _auth.signInWithIdentifier(id, password);
 
-    if (_selectedRole == 'Tenant') {
-      Navigator.pushReplacement(context,
-          MaterialPageRoute(builder: (_) => const TenantHome()));
-    } else {
-      Navigator.pushReplacement(context,
-          MaterialPageRoute(builder: (_) => const OwnerHome()));
+      // Only users who exist in the Owner table may enter.
+      final ok = await _auth.isOwner();
+      if (!ok) {
+        await _auth.signOut();
+        if (!mounted) return;
+        _showMessage(
+          'No owner account found. Please register as an owner first.',
+        );
+        return;
+      }
+
+      if (!mounted) return;
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const OwnerHome()),
+      );
+    } on AuthException catch (e) {
+      if (!mounted) return;
+      if (e.message.toLowerCase().contains('not confirmed')) {
+        _showMessage('Please verify your email first, then log in.');
+      } else {
+        _showMessage(
+          'Invalid email/mobile number or password. New owner? Please register first.',
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      debugPrint('Login error: $e');
+      _showMessage('Something went wrong: $e');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -73,13 +128,15 @@ class _LoginScreenState extends State<LoginScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 36),
             child: Column(
               children: [
-                Text('RENTFLOW · PROPERTY REGISTER',
-                    style: GoogleFonts.cormorantGaramond(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 3.2,
-                      color: _ivory.withOpacity(0.85),
-                    )),
+                Text(
+                  'RENTFLOW · PROPERTY REGISTER',
+                  style: GoogleFonts.cormorantGaramond(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 3.2,
+                    color: _ivory.withOpacity(0.85),
+                  ),
+                ),
                 const SizedBox(height: 28),
                 ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 440),
@@ -116,10 +173,18 @@ class _LoginScreenState extends State<LoginScreen> {
         height: 22,
         decoration: BoxDecoration(
           border: Border(
-            top: top ? const BorderSide(color: _gold, width: 2) : BorderSide.none,
-            bottom: !top ? const BorderSide(color: _gold, width: 2) : BorderSide.none,
-            left: left ? const BorderSide(color: _gold, width: 2) : BorderSide.none,
-            right: !left ? const BorderSide(color: _gold, width: 2) : BorderSide.none,
+            top: top
+                ? const BorderSide(color: _gold, width: 2)
+                : BorderSide.none,
+            bottom: !top
+                ? const BorderSide(color: _gold, width: 2)
+                : BorderSide.none,
+            left: left
+                ? const BorderSide(color: _gold, width: 2)
+                : BorderSide.none,
+            right: !left
+                ? const BorderSide(color: _gold, width: 2)
+                : BorderSide.none,
           ),
         ),
       ),
@@ -159,26 +224,34 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
           ),
           const SizedBox(height: 14),
-          Text('RentFlow',
-              textAlign: TextAlign.center,
-              style: GoogleFonts.cormorantGaramond(
-                fontSize: 21,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 3.2,
-                color: _ink,
-              )),
-          const SizedBox(height: 10),
-          Center(
-            child: Container(width: 46, height: 1, color: _gold.withOpacity(0.35)),
+          Text(
+            'RentFlow',
+            textAlign: TextAlign.center,
+            style: GoogleFonts.cormorantGaramond(
+              fontSize: 21,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 3.2,
+              color: _ink,
+            ),
           ),
           const SizedBox(height: 10),
-          Text('Rental management, formally recorded.',
-              textAlign: TextAlign.center,
-              style: GoogleFonts.lora(
-                fontSize: 13,
-                fontStyle: FontStyle.italic,
-                color: _inkFaint,
-              )),
+          Center(
+            child: Container(
+              width: 46,
+              height: 1,
+              color: _gold.withOpacity(0.35),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'Rental management, formally recorded.',
+            textAlign: TextAlign.center,
+            style: GoogleFonts.lora(
+              fontSize: 13,
+              fontStyle: FontStyle.italic,
+              color: _inkFaint,
+            ),
+          ),
           const SizedBox(height: 26),
 
           // role plaques
@@ -191,9 +264,11 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
           const SizedBox(height: 26),
 
-          _buildLabel(_selectedRole == 'Owner'
-              ? 'Email or mobile number'
-              : 'Tenant ID or mobile number'),
+          _buildLabel(
+            _selectedRole == 'Owner'
+                ? 'Email or mobile number'
+                : 'Tenant ID or mobile number',
+          ),
           const SizedBox(height: 7),
           _buildTextField(
             controller: _idController,
@@ -244,16 +319,20 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  Text('Keep me signed in',
-                      style: GoogleFonts.lora(fontSize: 12.5, color: _inkSoft)),
+                  Text(
+                    'Keep me signed in',
+                    style: GoogleFonts.lora(fontSize: 12.5, color: _inkSoft),
+                  ),
                 ],
               ),
-              Text('Forgot password?',
-                  style: GoogleFonts.lora(
-                    fontSize: 12.5,
-                    color: _accentDark,
-                    decoration: TextDecoration.underline,
-                  )),
+              Text(
+                'Forgot password?',
+                style: GoogleFonts.lora(
+                  fontSize: 12.5,
+                  color: _accentDark,
+                  decoration: TextDecoration.underline,
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 22),
@@ -276,13 +355,18 @@ class _LoginScreenState extends State<LoginScreen> {
                       width: 22,
                       height: 22,
                       child: CircularProgressIndicator(
-                          color: Colors.white, strokeWidth: 2.5))
-                  : Text('Log in as $_selectedRole',
+                        color: Colors.white,
+                        strokeWidth: 2.5,
+                      ),
+                    )
+                  : Text(
+                      'Log in as $_selectedRole',
                       style: GoogleFonts.cormorantGaramond(
                         fontSize: 17,
                         fontWeight: FontWeight.w600,
                         letterSpacing: 0.6,
-                      )),
+                      ),
+                    ),
             ),
           ),
           const SizedBox(height: 18),
@@ -297,14 +381,17 @@ class _LoginScreenState extends State<LoginScreen> {
                         TextSpan(
                           text: 'Register as an owner',
                           style: TextStyle(
-                              color: _accentDark,
-                              fontWeight: FontWeight.w700,
-                              decoration: TextDecoration.underline),
+                            color: _accentDark,
+                            fontWeight: FontWeight.w700,
+                            decoration: TextDecoration.underline,
+                          ),
                           recognizer: TapGestureRecognizer()
                             ..onTap = () => Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                    builder: (_) => const OwnerSignupPage())),
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const OwnerSignupPage(),
+                              ),
+                            ),
                         ),
                       ],
                     ),
@@ -317,13 +404,16 @@ class _LoginScreenState extends State<LoginScreen> {
                         TextSpan(
                           text: 'Set up your password',
                           style: TextStyle(
-                              color: _accentDark,
-                              decoration: TextDecoration.underline),
+                            color: _accentDark,
+                            decoration: TextDecoration.underline,
+                          ),
                           recognizer: TapGestureRecognizer()
                             ..onTap = () => Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                    builder: (_) => const TenantSignupPage())),
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const TenantSignupPage(),
+                              ),
+                            ),
                         ),
                       ],
                     ),
@@ -344,9 +434,7 @@ class _LoginScreenState extends State<LoginScreen> {
         padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 6),
         decoration: BoxDecoration(
           color: selected ? accent : Colors.transparent,
-          border: Border.all(
-            color: selected ? accent : _ink.withOpacity(0.18),
-          ),
+          border: Border.all(color: selected ? accent : _ink.withOpacity(0.18)),
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -355,14 +443,16 @@ class _LoginScreenState extends State<LoginScreen> {
             Icon(icon, size: 15, color: selected ? Colors.white : _inkSoft),
             const SizedBox(width: 6),
             Flexible(
-              child: Text(role,
-                  overflow: TextOverflow.ellipsis,
-                  maxLines: 1,
-                  style: GoogleFonts.lora(
-                    fontSize: 13.5,
-                    fontWeight: FontWeight.w500,
-                    color: selected ? Colors.white : _inkSoft,
-                  )),
+              child: Text(
+                role,
+                overflow: TextOverflow.ellipsis,
+                maxLines: 1,
+                style: GoogleFonts.lora(
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.w500,
+                  color: selected ? Colors.white : _inkSoft,
+                ),
+              ),
             ),
           ],
         ),
@@ -386,13 +476,15 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Widget _buildLabel(String text) {
-    return Text(text.toUpperCase(),
-        style: GoogleFonts.lora(
-          fontSize: 11,
-          fontWeight: FontWeight.w600,
-          letterSpacing: 0.8,
-          color: _inkSoft,
-        ));
+    return Text(
+      text.toUpperCase(),
+      style: GoogleFonts.lora(
+        fontSize: 11,
+        fontWeight: FontWeight.w600,
+        letterSpacing: 0.8,
+        color: _inkSoft,
+      ),
+    );
   }
 
   Widget _buildTextField({
@@ -426,8 +518,10 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
           filled: true,
           fillColor: Colors.white,
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 14,
+            vertical: 14,
+          ),
         ),
       ),
     );
